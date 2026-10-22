@@ -249,6 +249,20 @@ describe('pomodoro notifications', () => {
     expect(ctor).toHaveBeenCalledWith('Long break over', expect.any(Object))
   })
 
+  it('re-alerts on every completion instead of silently replacing the last one', () => {
+    const ctor = installNotificationMock('granted')
+
+    notifyPomodoroComplete('work', 'shortBreak', prefs())
+    notifyPomodoroComplete('shortBreak', 'work', prefs())
+
+    // A shared tag replaces the previous notification; without renotify the
+    // browser swaps it in silently and the user never hears the second one.
+    expect(ctor).toHaveBeenCalledTimes(2)
+    for (const call of (ctor as unknown as ReturnType<typeof vi.fn>).mock.calls) {
+      expect(call[1]).toMatchObject({ tag: 'bento-pomodoro', renotify: true })
+    }
+  })
+
   it('stays silent when the user switched pomodoro notifications off', () => {
     installNotificationMock('granted')
     const listener = vi.fn()
@@ -385,6 +399,7 @@ describe('runTaskReminderCheck', () => {
     expect(runTaskReminderCheck([task], prefs(), now)).toHaveLength(1)
     expect(ctor).toHaveBeenCalledWith('Task due soon', expect.objectContaining({
       tag: 'bento-task-sweep',
+      renotify: true,
     }))
 
     expect(runTaskReminderCheck([task], prefs(), now)).toEqual([])

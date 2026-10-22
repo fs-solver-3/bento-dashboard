@@ -18,6 +18,8 @@ export interface NotifyOptions {
   icon?: string
   silent?: boolean
   requireInteraction?: boolean
+  /** Re-alert when this replaces an earlier notification with the same tag. */
+  renotify?: boolean
   data?: unknown
 }
 
@@ -191,8 +193,12 @@ export function notifyPomodoroComplete(
   preferences?: NotificationPreferences
 ): Notification | null {
   const { title, body } = buildPomodoroMessage(completedMode, nextMode)
+  // A stable tag keeps one timer notification in the tray instead of stacking
+  // them up, and renotify makes each replacement alert again rather than
+  // silently updating the previous one.
   return deliver(title, body, 'pomodoro', preferences, {
     tag: 'bento-pomodoro',
+    renotify: true,
     requireInteraction: true,
   })
 }
@@ -253,7 +259,10 @@ export function notifyTaskDue(
 ): Notification | null {
   const { title, body } = buildTaskReminderMessage(task, now)
   remindedTasks.add(reminderKey(task))
-  return deliver(title, body, 'tasks', preferences, { tag: `bento-task-${task.id}` })
+  return deliver(title, body, 'tasks', preferences, {
+    tag: `bento-task-${task.id}`,
+    renotify: true,
+  })
 }
 
 /** Runs one reminder sweep and returns the tasks that were notified about. */
