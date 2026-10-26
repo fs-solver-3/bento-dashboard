@@ -12,7 +12,9 @@ import type {
   NotificationPreferences,
   WidgetType,
   Position,
-  WidgetSize
+  WidgetSize,
+  ExportedData,
+  ImportMode
 } from '../types'
 import { DEFAULT_NOTIFICATION_PREFERENCES } from '../utils/notifications'
 
@@ -52,6 +54,20 @@ interface DashboardStore {
   setUserName: (name: string) => void
   toggleAnimations: () => void
   updateNotificationPreferences: (changes: Partial<NotificationPreferences>) => void
+
+  importData: (data: ExportedData, mode: ImportMode) => void
+}
+
+/**
+ * Upsert by `id`: an imported record replaces the one it matches, in place,
+ * and unmatched imported records are appended. IDs are never regenerated, so
+ * importing the same backup twice in merge mode is a no-op.
+ */
+function upsertById<T extends { id: string }>(current: T[], incoming: T[]): T[] {
+  const byId = new Map<string, T>()
+  for (const item of current) byId.set(item.id, item)
+  for (const item of incoming) byId.set(item.id, item)
+  return Array.from(byId.values())
 }
 
 const defaultWidgets: WidgetConfig[] = [
@@ -316,6 +332,39 @@ export const useDashboardStore = create<DashboardStore>()(
               ...DEFAULT_NOTIFICATION_PREFERENCES,
               ...state.preferences.notifications,
               ...changes,
+            },
+          },
+        }))
+      },
+
+      /**
+       * Installs a validated backup. The only way imported data reaches the
+       * store - UI never writes these slices itself.
+       *
+       * The live timer is deliberately untouched in both modes: `timeLeft`,
+       * `isRunning` and `mode` keep their current values, and only the
+       * `sessionsCompleted` tally travels. Merge keeps the higher tally so a
+       * restore cannot erase sessions the user has already run here.
+       */
+      importData: (data, mode) => {
+        set((state) => ({
+          widgets:
+            mode === 'replace' ? data.widgets : upsertById(state.widgets, data.widgets),
+          notes: mode === 'replace' ? data.notes : upsertById(state.notes, data.notes),
+          tasks: mode === 'replace' ? data.tasks : upsertById(state.tasks, data.tasks),
+          pomodoro: {
+            ...state.pomodoro,
+            sessionsCompleted:
+              mode === 'replace'
+                ? data.pomodoro.sessionsCompleted
+                : Math.max(state.pomodoro.sessionsCompleted, data.pomodoro.sessionsCompleted),
+          },
+          preferences: {
+            ...(mode === 'replace' ? {} : state.preferences),
+            ...data.preferences,
+            notifications: {
+              ...DEFAULT_NOTIFICATION_PREFERENCES,
+              ...(data.preferences.notifications ?? {}),
             },
           },
         }))

@@ -2,6 +2,7 @@ import { useState, useCallback } from 'react'
 import { useDashboardStore } from '../store/dashboardStore'
 import { ThemeToggle } from './ThemeToggle'
 import { NotificationSettings } from './NotificationSettings'
+import { DataSettings } from './DataSettings'
 import { NotificationToasts } from './NotificationToasts'
 import { WIDGET_REGISTRY, getWidgetComponent, getWidgetSizeClasses, AVAILABLE_WIDGETS } from './WidgetRegistry'
 import { Plus, X, Settings, LayoutGrid, Grid3X3 } from 'lucide-react'
@@ -163,7 +164,7 @@ function SettingsPanel({
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={onClose}>
       <div 
-        className="bg-white dark:bg-gray-800 rounded-xl p-6 w-full max-w-md mx-4"
+        className="bg-white dark:bg-gray-800 rounded-xl p-6 w-full max-w-md mx-4 max-h-[90vh] overflow-y-auto"
         onClick={(e) => e.stopPropagation()}
         role="dialog"
         aria-modal="true"
@@ -214,6 +215,10 @@ function SettingsPanel({
 
           <div className="pt-2 border-t border-gray-200 dark:border-gray-700">
             <NotificationSettings />
+          </div>
+
+          <div className="pt-2 border-t border-gray-200 dark:border-gray-700">
+            <DataSettings />
           </div>
         </div>
 

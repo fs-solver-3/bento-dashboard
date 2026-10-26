@@ -98,3 +98,34 @@ export interface DashboardState {
   preferences: UserPreferences;
   lastPomodoroCompletion: PomodoroCompletion | null;
 }
+
+/**
+ * The pomodoro fields that survive a backup. `timeLeft`, `isRunning` and
+ * `mode` describe a timer on one device at one moment, so they are never
+ * written to a file and never read from one.
+ */
+export interface ExportedPomodoro {
+  sessionsCompleted: number;
+}
+
+/** The five persisted slices, exactly as `partialize` defines them. */
+export interface ExportedData {
+  widgets: WidgetConfig[];
+  notes: Note[];
+  tasks: Task[];
+  pomodoro: ExportedPomodoro;
+  preferences: UserPreferences;
+}
+
+/** Versioned envelope written to disk by the export, read back by the import. */
+export interface BackupFile {
+  schemaVersion: number;
+  exportedAt: string;
+  data: ExportedData;
+}
+
+/**
+ * Replace wipes the five slices and installs the file.
+ * Merge upserts records by `id`; the imported record wins.
+ */
+export type ImportMode = 'replace' | 'merge';

@@ -17,6 +17,7 @@ This repository serves as a hands-on learning platform for developers who want t
 - **Weather Widget**: Current weather conditions with location search
 - **Calendar**: Monthly calendar view with event tracking
 - **Browser Notifications**: Pomodoro completion alerts and task due reminders, with in-app fallback
+- **Backup & Restore**: Export everything to a JSON file on your own device, and import it back by merging or replacing
 - **Theme Support**: Light, dark, and system theme modes
 - **Local Storage**: Persistent data across browser sessions
 
@@ -105,6 +106,7 @@ bento-dashboard/
 ├── src/
 │   ├── components/
 │   │   ├── Dashboard.tsx       # Main dashboard component
+│   │   ├── DataSettings.tsx    # Backup export/import UI
 │   │   ├── NotificationSettings.tsx  # Notification permission and preferences UI
 │   │   ├── NotificationToasts.tsx    # In-app fallback for blocked notifications
 │   │   ├── ThemeToggle.tsx     # Theme switcher
@@ -124,6 +126,8 @@ bento-dashboard/
 │   ├── types/
 │   │   └── index.ts            # TypeScript type definitions
 │   ├── utils/
+│   │   ├── export.ts           # Backup envelope and file download
+│   │   ├── import.ts           # Backup validation and file reading
 │   │   └── notifications.ts    # Notifications API wrapper and reminder logic
 │   ├── App.tsx                 # Root component
 │   ├── index.css               # Global styles with Tailwind v4
@@ -132,6 +136,10 @@ bento-dashboard/
 │   ├── setup.ts                # Test setup and mocks
 │   ├── ClockWidget.test.tsx
 │   ├── Dashboard.test.tsx
+│   ├── dashboardStore.test.ts
+│   ├── DataSettings.test.tsx
+│   ├── export.test.ts
+│   ├── import.test.ts
 │   ├── NotesWidget.test.tsx
 │   ├── NotificationSettings.test.tsx
 │   ├── NotificationToasts.test.tsx
