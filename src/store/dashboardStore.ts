@@ -14,9 +14,11 @@ import type {
   Position,
   WidgetSize,
   ExportedData,
-  ImportMode
+  ImportMode,
+  ImportOutcome
 } from '../types'
 import { DEFAULT_NOTIFICATION_PREFERENCES } from '../utils/notifications'
+import { DEFAULT_PREFERENCES } from '../utils/preferences'
 
 interface DashboardStore {
   widgets: WidgetConfig[]
@@ -55,7 +57,7 @@ interface DashboardStore {
   toggleAnimations: () => void
   updateNotificationPreferences: (changes: Partial<NotificationPreferences>) => void
 
-  importData: (data: ExportedData, mode: ImportMode) => void
+  importData: (data: ExportedData, mode: ImportMode) => ImportOutcome
 }
 
 /**
@@ -70,6 +72,46 @@ function upsertById<T extends { id: string }>(current: T[], incoming: T[]): T[] 
   return Array.from(byId.values())
 }
 
+type ImportSlices = Pick<
+  DashboardStore,
+  'widgets' | 'notes' | 'tasks' | 'pomodoro' | 'preferences'
+>
+
+/** Builds the post-import state for either mode. */
+function applyImport(
+  set: (partial: (state: DashboardStore) => Partial<DashboardStore>) => void,
+  data: ExportedData,
+  mode: ImportMode
+): void {
+  set((state): ImportSlices => ({
+    widgets: mode === 'replace' ? data.widgets : upsertById(state.widgets, data.widgets),
+    notes: mode === 'replace' ? data.notes : upsertById(state.notes, data.notes),
+    tasks: mode === 'replace' ? data.tasks : upsertById(state.tasks, data.tasks),
+    pomodoro: {
+      // Only the tally travels; the live timer keeps its current values.
+      ...state.pomodoro,
+      sessionsCompleted: data.pomodoro.sessionsCompleted,
+    },
+    preferences: {
+      ...data.preferences,
+      notifications: {
+        ...DEFAULT_NOTIFICATION_PREFERENCES,
+        ...(data.preferences.notifications ?? {}),
+      },
+    },
+  }))
+}
+
+/** Every browser spells a full localStorage differently. */
+function isQuotaError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false
+  return (
+    error.name === 'QuotaExceededError' ||
+    error.name === 'NS_ERROR_DOM_QUOTA_REACHED' ||
+    (error as DOMException).code === 22
+  )
+}
+
 const defaultWidgets: WidgetConfig[] = [
   { id: uuidv4(), type: 'clock', position: { x: 0, y: 0 }, size: 'medium' },
   { id: uuidv4(), type: 'weather', position: { x: 1, y: 0 }, size: 'medium' },
@@ -77,14 +119,6 @@ const defaultWidgets: WidgetConfig[] = [
   { id: uuidv4(), type: 'pomodoro', position: { x: 2, y: 0 }, size: 'small' },
   { id: uuidv4(), type: 'tasks', position: { x: 2, y: 1 }, size: 'medium' },
 ]
-
-const defaultPreferences: UserPreferences = {
-  theme: 'system',
-  userName: 'User',
-  dashboardLayout: 'grid',
-  animationsEnabled: true,
-  notifications: DEFAULT_NOTIFICATION_PREFERENCES,
-}
 
 const PHASE_DURATIONS: Record<PomodoroState['mode'], number> = {
   work: 25 * 60,
@@ -107,7 +141,7 @@ export const useDashboardStore = create<DashboardStore>()(
       tasks: [],
       pomodoro: defaultPomodoro,
       weather: null,
-      preferences: defaultPreferences,
+      preferences: DEFAULT_PREFERENCES,
       lastPomodoroCompletion: null,
 
       addWidget: (type, position, size) => {
@@ -343,31 +377,42 @@ export const useDashboardStore = create<DashboardStore>()(
        *
        * The live timer is deliberately untouched in both modes: `timeLeft`,
        * `isRunning` and `mode` keep their current values, and only the
-       * `sessionsCompleted` tally travels. Merge keeps the higher tally so a
-       * restore cannot erase sessions the user has already run here.
+       * `sessionsCompleted` tally travels. Values that are not keyed by `id`
+       * - the tally, and each preference - are taken from the file in both
+       * modes, the same way a matching record is.
+       *
+       * Persisting happens synchronously inside `set`, so a storage quota
+       * failure throws from there with the new state already in memory. The
+       * five slices are snapshotted first and put back if that happens, so a
+       * failed import leaves the dashboard exactly as it was.
        */
       importData: (data, mode) => {
-        set((state) => ({
-          widgets:
-            mode === 'replace' ? data.widgets : upsertById(state.widgets, data.widgets),
-          notes: mode === 'replace' ? data.notes : upsertById(state.notes, data.notes),
-          tasks: mode === 'replace' ? data.tasks : upsertById(state.tasks, data.tasks),
-          pomodoro: {
-            ...state.pomodoro,
-            sessionsCompleted:
-              mode === 'replace'
-                ? data.pomodoro.sessionsCompleted
-                : Math.max(state.pomodoro.sessionsCompleted, data.pomodoro.sessionsCompleted),
-          },
-          preferences: {
-            ...(mode === 'replace' ? {} : state.preferences),
-            ...data.preferences,
-            notifications: {
-              ...DEFAULT_NOTIFICATION_PREFERENCES,
-              ...(data.preferences.notifications ?? {}),
-            },
-          },
-        }))
+        const before = get()
+        const snapshot = {
+          widgets: before.widgets,
+          notes: before.notes,
+          tasks: before.tasks,
+          pomodoro: before.pomodoro,
+          preferences: before.preferences,
+        }
+
+        try {
+          applyImport(set, data, mode)
+          return { ok: true }
+        } catch (error) {
+          // `set` already wrote the new state to memory before persisting
+          // threw, so this put-back is what actually restores the dashboard.
+          // localStorage still holds the pre-import payload either way: a
+          // failed `setItem` leaves the previous value untouched.
+          try {
+            set(snapshot)
+          } catch {
+            // The put-back is smaller than the payload that just failed, so
+            // this is not expected. Memory is restored regardless.
+          }
+          if (isQuotaError(error)) return { ok: false, reason: 'storage-full' }
+          throw error
+        }
       },
     }),
     {

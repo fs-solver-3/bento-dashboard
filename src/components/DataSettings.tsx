@@ -3,7 +3,7 @@ import { AlertCircle, Check, Download, Upload } from 'lucide-react'
 import { useDashboardStore } from '../store/dashboardStore'
 import { describeBackup, downloadBackup } from '../utils/export'
 import { parseBackup, readBackupFile, type ImportSuccess } from '../utils/import'
-import type { ImportMode } from '../types'
+import type { ImportMode, ImportOutcome } from '../types'
 
 type Status = { tone: 'success' | 'error'; message: string } | null
 
@@ -21,6 +21,17 @@ export function DataSettings() {
   const [status, setStatus] = useState<Status>(null)
   const [pending, setPending] = useState<ImportSuccess | null>(null)
 
+  /**
+   * A validated file is tied to the mode it was read for, so switching modes
+   * throws away a pending confirmation rather than replaying it under rules
+   * it was not checked against.
+   */
+  const chooseMode = (next: ImportMode) => {
+    setMode(next)
+    setPending(null)
+    setStatus(null)
+  }
+
   const handleExport = () => {
     try {
       downloadBackup({ widgets, notes, tasks, pomodoro, preferences })
@@ -29,6 +40,41 @@ export function DataSettings() {
       setStatus({ tone: 'error', message: 'Your browser blocked the download.' })
     }
     setPending(null)
+  }
+
+  /**
+   * The single point where imported data reaches the store. Either outcome
+   * leaves the dashboard consistent: on a storage failure the store has
+   * already rolled itself back, so there is nothing to undo here.
+   */
+  const apply = (data: ImportSuccess['data'], applyMode: ImportMode) => {
+    let outcome: ImportOutcome
+    try {
+      outcome = importData(data, applyMode)
+    } catch {
+      setStatus({
+        tone: 'error',
+        message: 'This backup could not be imported. Nothing on your dashboard was changed.',
+      })
+      return
+    }
+
+    if (!outcome.ok) {
+      setStatus({
+        tone: 'error',
+        message:
+          "There isn't enough room in this browser's storage for that backup. Nothing on your dashboard was changed.",
+      })
+      return
+    }
+
+    setStatus({
+      tone: 'success',
+      message:
+        applyMode === 'merge'
+          ? `Merged in ${describeBackup(data)}.`
+          : `Replaced everything with ${describeBackup(data)}.`,
+    })
   }
 
   const handleFile = async (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -48,7 +94,7 @@ export function DataSettings() {
       return
     }
 
-    const result = parseBackup(text, preferences)
+    const result = parseBackup(text, { mode, currentPreferences: preferences })
     if (!result.ok) {
       // Nothing has been written at this point, so the dashboard is untouched.
       setStatus({ tone: 'error', message: result.error })
@@ -60,14 +106,12 @@ export function DataSettings() {
       return
     }
 
-    importData(result.data, 'merge')
-    setStatus({ tone: 'success', message: `Merged in ${describeBackup(result.data)}.` })
+    apply(result.data, 'merge')
   }
 
   const confirmReplace = () => {
     if (!pending) return
-    importData(pending.data, 'replace')
-    setStatus({ tone: 'success', message: `Replaced everything with ${describeBackup(pending.data)}.` })
+    apply(pending.data, 'replace')
     setPending(null)
   }
 
@@ -96,7 +140,7 @@ export function DataSettings() {
             name="import-mode"
             value="merge"
             checked={mode === 'merge'}
-            onChange={() => setMode('merge')}
+            onChange={() => chooseMode('merge')}
             className="mt-0.5 w-4 h-4 border-gray-300 text-primary-500 focus:ring-primary-500"
           />
           <span className="text-sm">
@@ -113,7 +157,7 @@ export function DataSettings() {
             name="import-mode"
             value="replace"
             checked={mode === 'replace'}
-            onChange={() => setMode('replace')}
+            onChange={() => chooseMode('replace')}
             className="mt-0.5 w-4 h-4 border-gray-300 text-primary-500 focus:ring-primary-500"
           />
           <span className="text-sm">

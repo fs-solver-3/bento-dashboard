@@ -59,8 +59,17 @@ export function describeBackup(data: ExportedData): string {
 }
 
 /**
- * Triggers the browser download. The Blob URL is revoked straight after the
- * synchronous click so the serialized copy does not sit in memory.
+ * How long to leave the Blob URL alive after the click.
+ *
+ * Revoking in the same tick as `click()` is enough for Chrome but can cancel
+ * the download in Firefox and Safari, which read the URL after the click
+ * handler returns. A deferred revoke still frees the memory; it just does not
+ * race the browser for it.
+ */
+export const REVOKE_DELAY_MS = 1000
+
+/**
+ * Triggers the browser download.
  *
  * Returns the envelope it wrote, so a caller can report on it.
  */
@@ -77,6 +86,6 @@ export function downloadBackup(state: ExportableState, now: Date = new Date()): 
   anchor.click()
   document.body.removeChild(anchor)
 
-  URL.revokeObjectURL(url)
+  setTimeout(() => URL.revokeObjectURL(url), REVOKE_DELAY_MS)
   return backup
 }

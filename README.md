@@ -128,6 +128,7 @@ bento-dashboard/
 │   ├── utils/
 │   │   ├── export.ts           # Backup envelope and file download
 │   │   ├── import.ts           # Backup validation and file reading
+│   │   ├── preferences.ts      # Default user preferences
 │   │   └── notifications.ts    # Notifications API wrapper and reminder logic
 │   ├── App.tsx                 # Root component
 │   ├── index.css               # Global styles with Tailwind v4

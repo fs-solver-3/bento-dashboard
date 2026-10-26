@@ -1,17 +1,19 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach, type Mock } from 'vitest'
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { useDashboardStore } from '../src/store/dashboardStore'
 import { DataSettings } from '../src/components/DataSettings'
 import { DEFAULT_NOTIFICATION_PREFERENCES } from '../src/utils/notifications'
 import { buildBackup, serializeBackup, type ExportableState } from '../src/utils/export'
+import type { ExportedData, ImportMode, ImportOutcome } from '../src/types'
 
 vi.mock('../src/store/dashboardStore', () => ({
   useDashboardStore: vi.fn(),
 }))
 
 const mockedStore = useDashboardStore as unknown as ReturnType<typeof vi.fn>
-const mockImport = vi.fn()
+// Typed through the store's own signature so the calls can be asserted on.
+const mockImport: Mock<(data: ExportedData, mode: ImportMode) => ImportOutcome> = vi.fn()
 
 const storeState: ExportableState = {
   widgets: [{ id: 'w1', type: 'clock', position: { x: 0, y: 0 }, size: 'medium' }],
@@ -42,6 +44,7 @@ function backupFile(contents: string = serializeBackup(buildBackup(storeState)))
 describe('DataSettings', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    mockImport.mockReturnValue({ ok: true })
     mockedStore.mockReturnValue({ ...storeState, importData: mockImport })
     URL.createObjectURL = vi.fn(() => 'blob:bento') as unknown as typeof URL.createObjectURL
     URL.revokeObjectURL = vi.fn() as unknown as typeof URL.revokeObjectURL
@@ -125,6 +128,58 @@ describe('DataSettings', () => {
     await userEvent.upload(screen.getByLabelText(/choose a backup file/i), backupFile('nonsense'))
 
     expect(await screen.findByRole('alert')).toHaveTextContent(/not valid JSON/i)
+    expect(mockImport).not.toHaveBeenCalled()
+  })
+
+  it('reports a full storage without claiming anything changed', async () => {
+    mockImport.mockReturnValue({ ok: false, reason: 'storage-full' })
+
+    render(<DataSettings />)
+    await userEvent.upload(screen.getByLabelText(/choose a backup file/i), backupFile())
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/isn't enough room/i)
+    expect(screen.queryByText(/merged in/i)).not.toBeInTheDocument()
+  })
+
+  it('reports an unexpected failure rather than letting it escape', async () => {
+    mockImport.mockImplementation(() => {
+      throw new Error('something went wrong')
+    })
+
+    render(<DataSettings />)
+    await userEvent.upload(screen.getByLabelText(/choose a backup file/i), backupFile())
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/could not be imported/i)
+  })
+
+  it('reads the file for the mode that is selected', async () => {
+    // A backup with no preferences: merge keeps the current ones, replace
+    // resets them to the defaults, so the two modes must not share a verdict.
+    const noPreferences = JSON.stringify({
+      ...buildBackup(storeState),
+      data: { ...buildBackup(storeState).data, preferences: undefined },
+    })
+
+    render(<DataSettings />)
+    await userEvent.upload(
+      screen.getByLabelText(/choose a backup file/i),
+      backupFile(noPreferences)
+    )
+
+    await waitFor(() => expect(mockImport).toHaveBeenCalled())
+    expect(mockImport.mock.calls[0][0].preferences.userName).toBe('Ada')
+  })
+
+  it('drops a pending replace when the mode changes under it', async () => {
+    render(<DataSettings />)
+
+    await userEvent.click(screen.getByRole('radio', { name: /replace/i }))
+    await userEvent.upload(screen.getByLabelText(/choose a backup file/i), backupFile())
+    await screen.findByText(/replace everything on this dashboard/i)
+
+    await userEvent.click(screen.getByRole('radio', { name: /merge/i }))
+
+    expect(screen.queryByText(/replace everything on this dashboard/i)).not.toBeInTheDocument()
     expect(mockImport).not.toHaveBeenCalled()
   })
 

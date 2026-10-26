@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, vi, type Mock } from 'vitest'
 import { useDashboardStore } from '../src/store/dashboardStore'
 import { DEFAULT_NOTIFICATION_PREFERENCES } from '../src/utils/notifications'
 import type { ExportedData, Note, Task, UserPreferences, WidgetConfig } from '../src/types'
@@ -45,6 +45,7 @@ const backup = (overrides: Partial<ExportedData> = {}): ExportedData => ({
 
 describe('importData', () => {
   beforeEach(() => {
+    vi.clearAllMocks()
     useDashboardStore.setState({
       widgets: [widget('w-local')],
       notes: [note('n-local', 'already here')],
@@ -126,14 +127,107 @@ describe('importData', () => {
       expect(afterSecond.preferences).toEqual(snapshot.preferences)
     })
 
-    it('keeps the higher pomodoro tally so a restore cannot erase sessions', () => {
+    it('takes the pomodoro tally from the file, even when it is lower', () => {
+      // Not id-keyed, so the imported value wins - the same rule as a matching
+      // record, including when it lowers the tally from 4 to 1.
       useDashboardStore.getState().importData(backup({ pomodoro: { sessionsCompleted: 1 } }), 'merge')
 
-      expect(useDashboardStore.getState().pomodoro.sessionsCompleted).toBe(4)
+      expect(useDashboardStore.getState().pomodoro.sessionsCompleted).toBe(1)
 
       useDashboardStore.getState().importData(backup({ pomodoro: { sessionsCompleted: 11 } }), 'merge')
 
       expect(useDashboardStore.getState().pomodoro.sessionsCompleted).toBe(11)
+    })
+
+    it('takes each preference from the file', () => {
+      useDashboardStore.getState().importData(backup(), 'merge')
+
+      expect(useDashboardStore.getState().preferences.userName).toBe('Imported Ada')
+      expect(useDashboardStore.getState().preferences.theme).toBe('dark')
+    })
+  })
+
+  describe('when the browser cannot store the result', () => {
+    const quotaError = () => {
+      const error = new Error('exceeded the quota')
+      error.name = 'QuotaExceededError'
+      return error
+    }
+
+    const failNextWrite = (error: Error = quotaError()) => {
+      const setItem = window.localStorage.setItem as unknown as Mock
+      setItem.mockImplementationOnce(() => {
+        throw error
+      })
+      return setItem
+    }
+
+    beforeEach(() => {
+      ;(window.localStorage.setItem as unknown as Mock).mockReset()
+    })
+
+    it('reports the failure instead of throwing', () => {
+      failNextWrite()
+
+      const outcome = useDashboardStore.getState().importData(backup(), 'replace')
+
+      expect(outcome).toEqual({ ok: false, reason: 'storage-full' })
+    })
+
+    it.each(['replace', 'merge'] as const)(
+      'leaves every slice exactly as it was after a failed %s',
+      (mode) => {
+        const before = useDashboardStore.getState()
+        const untouched = {
+          widgets: before.widgets,
+          notes: before.notes,
+          tasks: before.tasks,
+          pomodoro: before.pomodoro,
+          preferences: before.preferences,
+        }
+        failNextWrite()
+
+        const outcome = useDashboardStore.getState().importData(backup(), mode)
+
+        const after = useDashboardStore.getState()
+        expect(outcome.ok).toBe(false)
+        expect(after.widgets).toEqual(untouched.widgets)
+        expect(after.notes).toEqual(untouched.notes)
+        expect(after.tasks).toEqual(untouched.tasks)
+        expect(after.pomodoro).toEqual(untouched.pomodoro)
+        expect(after.preferences).toEqual(untouched.preferences)
+      }
+    )
+
+    it('rewrites the rolled-back state so storage and memory agree', () => {
+      const setItem = failNextWrite()
+
+      useDashboardStore.getState().importData(backup(), 'replace')
+
+      // The failed write, then the put-back.
+      expect(setItem).toHaveBeenCalledTimes(2)
+      const lastWrite = JSON.parse(setItem.mock.calls[1][1] as string)
+      expect(lastWrite.state.notes.map((n: { id: string }) => n.id)).toEqual(['n-local'])
+    })
+
+    it('still succeeds on the next try once there is room', () => {
+      failNextWrite()
+      useDashboardStore.getState().importData(backup(), 'replace')
+
+      const outcome = useDashboardStore.getState().importData(backup(), 'replace')
+
+      expect(outcome).toEqual({ ok: true })
+      expect(useDashboardStore.getState().notes.map((n) => n.id)).toEqual(['n-imported'])
+    })
+
+    it('rolls back and rethrows an error that is not about storage space', () => {
+      const before = useDashboardStore.getState().notes
+      failNextWrite(new TypeError('something else entirely'))
+
+      expect(() => useDashboardStore.getState().importData(backup(), 'replace')).toThrow(
+        'something else entirely'
+      )
+      expect(useDashboardStore.getState().notes).toEqual(before)
     })
   })
 

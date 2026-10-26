@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import {
+  REVOKE_DELAY_MS,
   SCHEMA_VERSION,
   backupFileName,
   buildBackup,
@@ -157,11 +158,27 @@ describe('downloadBackup', () => {
     expect(clicked).toEqual({ download: 'bento-backup-2026-10-26.json' })
   })
 
-  it('releases the blob url and leaves no anchor behind', () => {
+  it('leaves no anchor behind', () => {
     downloadBackup(state())
 
-    expect(revokeObjectURL).toHaveBeenCalledWith('blob:bento')
     expect(document.querySelectorAll('a[download]')).toHaveLength(0)
+  })
+
+  it('releases the blob url, but not until the download has started', () => {
+    vi.useFakeTimers()
+    try {
+      downloadBackup(state())
+
+      // Revoking in the same tick as the click cancels the download in
+      // Firefox and Safari, so nothing may be revoked yet.
+      expect(revokeObjectURL).not.toHaveBeenCalled()
+
+      vi.advanceTimersByTime(REVOKE_DELAY_MS)
+
+      expect(revokeObjectURL).toHaveBeenCalledWith('blob:bento')
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('writes the same envelope it returns', async () => {

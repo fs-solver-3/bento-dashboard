@@ -1,16 +1,22 @@
 import { describe, it, expect } from 'vitest'
 import { parseBackup, readBackupFile, validateBackup } from '../src/utils/import'
+import { DEFAULT_PREFERENCES } from '../src/utils/preferences'
 import { buildBackup, serializeBackup, type ExportableState } from '../src/utils/export'
 import { DEFAULT_NOTIFICATION_PREFERENCES } from '../src/utils/notifications'
 import type { UserPreferences } from '../src/types'
 
+// Deliberately different from DEFAULT_PREFERENCES in every field, so a test
+// can tell which baseline a fallback came from.
 const currentPreferences: UserPreferences = {
-  theme: 'system',
-  userName: 'User',
-  dashboardLayout: 'grid',
-  animationsEnabled: true,
-  notifications: DEFAULT_NOTIFICATION_PREFERENCES,
+  theme: 'dark',
+  userName: 'Ada',
+  dashboardLayout: 'flex',
+  animationsEnabled: false,
+  notifications: { ...DEFAULT_NOTIFICATION_PREFERENCES, enabled: false },
 }
+
+const merging = { mode: 'merge', currentPreferences } as const
+const replacing = { mode: 'replace', currentPreferences } as const
 
 const widget = () => ({ id: 'w1', type: 'clock', position: { x: 0, y: 0 }, size: 'medium' })
 
@@ -44,7 +50,7 @@ const file = (overrides: Record<string, unknown> = {}, data: Record<string, unkn
   ...overrides,
 })
 
-const validate = (raw: unknown) => validateBackup(raw, currentPreferences)
+const validate = (raw: unknown) => validateBackup(raw, merging)
 
 const errorOf = (raw: unknown) => {
   const result = validate(raw)
@@ -188,11 +194,21 @@ describe('dates', () => {
 
 describe('preferences', () => {
   it('backfills notification defaults when the file predates them', () => {
-    const result = validate(file({}, { preferences: { theme: 'dark', userName: 'Ada' } }))
+    const result = validateBackup(
+      file({}, { preferences: { theme: 'dark', userName: 'Ada' } }),
+      replacing
+    )
 
     expect(result.ok && result.data.preferences.notifications).toEqual(
       DEFAULT_NOTIFICATION_PREFERENCES
     )
+  })
+
+  it('does not switch a merged-into setting back on when the file is silent', () => {
+    // currentPreferences has notifications disabled; the file says nothing.
+    const result = validate(file({}, { preferences: { theme: 'dark' } }))
+
+    expect(result.ok && result.data.preferences.notifications.enabled).toBe(false)
   })
 
   it('keeps notification settings the file does carry', () => {
@@ -215,33 +231,64 @@ describe('preferences', () => {
     })
   })
 
-  it('falls back to the current value for a preference it cannot read', () => {
+  it('falls back to the current value for a preference a merge cannot read', () => {
     const result = validate(
       file({}, { preferences: { theme: 'neon', dashboardLayout: 'spiral', userName: 7 } })
     )
 
-    expect(result.ok && result.data.preferences.theme).toBe('system')
-    expect(result.ok && result.data.preferences.dashboardLayout).toBe('grid')
-    expect(result.ok && result.data.preferences.userName).toBe('User')
+    expect(result.ok && result.data.preferences.theme).toBe('dark')
+    expect(result.ok && result.data.preferences.dashboardLayout).toBe('flex')
+    expect(result.ok && result.data.preferences.userName).toBe('Ada')
   })
 
-  it('survives a file with no preferences at all', () => {
+  it('merging a file with no preferences keeps the ones in force', () => {
     const result = validate(file({}, { preferences: undefined }))
 
     expect(result.ok && result.data.preferences).toEqual(currentPreferences)
+  })
+
+  it('replacing from a file with no preferences resets them to the defaults', () => {
+    const result = validateBackup(file({}, { preferences: undefined }), replacing)
+
+    expect(result.ok && result.data.preferences).toEqual(DEFAULT_PREFERENCES)
+    expect(result.ok && result.data.preferences).not.toEqual(currentPreferences)
+  })
+
+  it('replacing fills only the fields a partial preferences block omits', () => {
+    const result = validateBackup(
+      file({}, { preferences: { userName: 'From the file' } }),
+      replacing
+    )
+
+    expect(result.ok && result.data.preferences.userName).toBe('From the file')
+    // Not 'dark' - the user's current theme is not inherited by a replace.
+    expect(result.ok && result.data.preferences.theme).toBe(DEFAULT_PREFERENCES.theme)
+    expect(result.ok && result.data.preferences.animationsEnabled).toBe(
+      DEFAULT_PREFERENCES.animationsEnabled
+    )
+  })
+
+  it('takes a readable preference from the file in either mode', () => {
+    const preferences = { ...currentPreferences, theme: 'light', userName: 'Grace' }
+
+    for (const options of [merging, replacing]) {
+      const result = validateBackup(file({}, { preferences }), options)
+      expect(result.ok && result.data.preferences.theme).toBe('light')
+      expect(result.ok && result.data.preferences.userName).toBe('Grace')
+    }
   })
 })
 
 describe('parseBackup', () => {
   it('refuses text that is not JSON', () => {
-    const result = parseBackup('{ not json', currentPreferences)
+    const result = parseBackup('{ not json', merging)
 
     expect(result.ok).toBe(false)
     expect(!result.ok && result.error).toContain('not valid JSON')
   })
 
   it('applies the same rules as validateBackup', () => {
-    const result = parseBackup(JSON.stringify(file({ schemaVersion: 9 })), currentPreferences)
+    const result = parseBackup(JSON.stringify(file({ schemaVersion: 9 })), merging)
 
     expect(!result.ok && result.error).toContain('newer version of Bento')
   })
@@ -276,7 +323,7 @@ describe('round trip', () => {
   it('feeds export output straight back into import', () => {
     const text = serializeBackup(buildBackup(exported))
 
-    const result = parseBackup(text, currentPreferences)
+    const result = parseBackup(text, merging)
 
     expect(result.ok).toBe(true)
     if (!result.ok) return
@@ -288,12 +335,12 @@ describe('round trip', () => {
   })
 
   it('round-trips twice to the same value', () => {
-    const once = parseBackup(serializeBackup(buildBackup(exported)), currentPreferences)
+    const once = parseBackup(serializeBackup(buildBackup(exported)), merging)
     if (!once.ok) throw new Error('first pass should be valid')
 
     const twice = parseBackup(
       serializeBackup(buildBackup({ ...exported, ...once.data, pomodoro: exported.pomodoro })),
-      currentPreferences
+      merging
     )
 
     expect(twice.ok && twice.data).toEqual(once.data)
@@ -314,6 +361,6 @@ describe('readBackupFile', () => {
       new File([text], 'bento-backup.json', { type: 'application/json' })
     )
 
-    expect(parseBackup(contents, currentPreferences).ok).toBe(true)
+    expect(parseBackup(contents, merging).ok).toBe(true)
   })
 })

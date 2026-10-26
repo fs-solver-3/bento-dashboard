@@ -129,3 +129,9 @@ export interface BackupFile {
  * Merge upserts records by `id`; the imported record wins.
  */
 export type ImportMode = 'replace' | 'merge';
+
+/**
+ * What became of an import. `storage-full` means the browser refused to
+ * persist the result; the dashboard was rolled back to what it was.
+ */
+export type ImportOutcome = { ok: true } | { ok: false; reason: 'storage-full' };

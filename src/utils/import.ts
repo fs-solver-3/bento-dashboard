@@ -1,5 +1,6 @@
 import type {
   ExportedData,
+  ImportMode,
   Note,
   Task,
   UserPreferences,
@@ -8,6 +9,7 @@ import type {
   WidgetType,
 } from '../types'
 import { DEFAULT_NOTIFICATION_PREFERENCES } from './notifications'
+import { DEFAULT_PREFERENCES } from './preferences'
 import { SCHEMA_VERSION } from './export'
 
 /**
@@ -36,6 +38,24 @@ export interface ImportFailure {
 }
 
 export type ImportResult = ImportSuccess | ImportFailure
+
+export interface ValidateOptions {
+  /** Which mode the file is being read for - it decides the preference baseline. */
+  mode: ImportMode
+  /** The preferences in force right now, used as the baseline for a merge. */
+  currentPreferences: UserPreferences
+}
+
+/**
+ * What an unreadable or absent preference falls back to.
+ *
+ * Merge keeps what the user has; replace promises to install the file and
+ * nothing else, so anything the file does not carry comes from the defaults a
+ * fresh dashboard would have rather than from the user's current settings.
+ */
+function baselinePreferences({ mode, currentPreferences }: ValidateOptions): UserPreferences {
+  return mode === 'replace' ? DEFAULT_PREFERENCES : currentPreferences
+}
 
 const NOT_A_BACKUP = 'This file is not a Bento backup file.'
 
@@ -161,8 +181,10 @@ function firstError(
  * unknown theme or a missing notification block cannot reach the store. The
  * notification backfill is the same one `merge` in the store applies to
  * persisted payloads that predate notification settings.
+ *
+ * `baseline` is what a field falls back to - see `baselinePreferences`.
  */
-function normalizePreferences(raw: unknown, current: UserPreferences): UserPreferences {
+function normalizePreferences(raw: unknown, baseline: UserPreferences): UserPreferences {
   const saved = isRecord(raw) ? raw : {}
   const notifications = isRecord(saved.notifications) ? saved.notifications : {}
   const leadMinutes = notifications.taskReminderLeadMinutes
@@ -170,17 +192,21 @@ function normalizePreferences(raw: unknown, current: UserPreferences): UserPrefe
   return {
     theme: THEMES.includes(saved.theme as UserPreferences['theme'])
       ? (saved.theme as UserPreferences['theme'])
-      : current.theme,
-    userName: typeof saved.userName === 'string' ? saved.userName : current.userName,
+      : baseline.theme,
+    userName: typeof saved.userName === 'string' ? saved.userName : baseline.userName,
     dashboardLayout: LAYOUTS.includes(saved.dashboardLayout as UserPreferences['dashboardLayout'])
       ? (saved.dashboardLayout as UserPreferences['dashboardLayout'])
-      : current.dashboardLayout,
+      : baseline.dashboardLayout,
     animationsEnabled:
       typeof saved.animationsEnabled === 'boolean'
         ? saved.animationsEnabled
-        : current.animationsEnabled,
+        : baseline.animationsEnabled,
     notifications: {
+      // Defaults underneath so a file predating notification settings can
+      // never leave one undefined, then the baseline, so a merge does not
+      // silently switch back on something the user turned off.
       ...DEFAULT_NOTIFICATION_PREFERENCES,
+      ...baseline.notifications,
       ...(typeof notifications.enabled === 'boolean' ? { enabled: notifications.enabled } : {}),
       ...(typeof notifications.pomodoro === 'boolean' ? { pomodoro: notifications.pomodoro } : {}),
       ...(typeof notifications.tasks === 'boolean' ? { tasks: notifications.tasks } : {}),
@@ -195,10 +221,10 @@ function normalizePreferences(raw: unknown, current: UserPreferences): UserPrefe
  * Checks a parsed value against the v1 envelope and returns either the data to
  * apply or a message a user can act on.
  *
- * `fallbackPreferences` supplies any preference the file omits or garbles, so
- * an import never leaves the dashboard with an undefined preference.
+ * Any preference the file omits or garbles is filled from the baseline for the
+ * mode being imported, so an import never leaves a preference undefined.
  */
-export function validateBackup(raw: unknown, fallbackPreferences: UserPreferences): ImportResult {
+export function validateBackup(raw: unknown, options: ValidateOptions): ImportResult {
   if (!isRecord(raw)) return fail(NOT_A_BACKUP)
 
   const version = raw.schemaVersion
@@ -247,20 +273,20 @@ export function validateBackup(raw: unknown, fallbackPreferences: UserPreference
       notes: data.notes as Note[],
       tasks: data.tasks as Task[],
       pomodoro: { sessionsCompleted: Math.floor(sessionsCompleted) },
-      preferences: normalizePreferences(data.preferences, fallbackPreferences),
+      preferences: normalizePreferences(data.preferences, baselinePreferences(options)),
     },
   }
 }
 
 /** Same verdict as `validateBackup`, starting from the raw file text. */
-export function parseBackup(text: string, fallbackPreferences: UserPreferences): ImportResult {
+export function parseBackup(text: string, options: ValidateOptions): ImportResult {
   let parsed: unknown
   try {
     parsed = JSON.parse(text)
   } catch {
     return fail(`${NOT_A_BACKUP} It is not valid JSON.`)
   }
-  return validateBackup(parsed, fallbackPreferences)
+  return validateBackup(parsed, options)
 }
 
 /**
